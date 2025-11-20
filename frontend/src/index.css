@@ -1,0 +1,9 @@
+/* index.css */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* optional custom styles */
+body {
+  @apply bg-gray-100 text-gray-900;
+}

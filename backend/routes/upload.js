@@ -1,4 +1,3 @@
-// routes/upload.js
 import express from "express";
 import multer from "multer";
 import path from "path";
@@ -23,18 +22,46 @@ if (!process.env.OPENAI_API_KEY) {
   console.error("❌ OPENAI_API_KEY not set in .env");
 }
 
-// ---------------- UPLOAD FOLDER ----------------
+// File validation configuration
+const ALLOWED_FILE_TYPES = [".log", ".txt", ".json"];
+const MAX_SIZE = parseInt(process.env.MAX_UPLOAD_SIZE_BYTES || "5242880", 10);
+
+// Custom file filter for multer
+const fileFilter = (req, file, cb) => {
+  const fileName = file.originalname.toLowerCase();
+  const fileExtension = path.extname(fileName).toLowerCase();
+
+  if (!ALLOWED_FILE_TYPES.includes(fileExtension)) {
+    const error = new Error(
+      `Invalid file type. Allowed types: ${ALLOWED_FILE_TYPES.join(", ")}`
+    );
+    error.code = "INVALID_FILE_TYPE";
+    return cb(error);
+  }
+
+  cb(null, true);
+};
+
+// Upload folder setup
 const uploadDir = path.join(__dirname, "..", "uploads");
 if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
 
 const storage = multer.diskStorage({
   destination: uploadDir,
-  filename: (req, file, cb) =>
-    cb(null, Date.now() + "-" + file.originalname.replace(/\s+/g, "_"))
+  filename: (req, file, cb) => {
+    const timestamp = Date.now();
+    const sanitizedName = file.originalname
+      .replace(/\s+/g, "_")
+      .replace(/[^a-zA-Z0-9._-]/g, "");
+    cb(null, `${timestamp}-${sanitizedName}`);
+  }
 });
 
-const MAX_SIZE = parseInt(process.env.MAX_UPLOAD_SIZE_BYTES || "5242880", 10);
-const upload = multer({ storage, limits: { fileSize: MAX_SIZE } });
+const upload = multer({
+  storage,
+  limits: { fileSize: MAX_SIZE },
+  fileFilter
+});
 
 // ---------------- OPENAI JSON CALL ----------------
 export async function callOpenAIForJSON(sanitized) {
@@ -61,15 +88,46 @@ ${sanitized}
   throw new Error("Non-JSON returned from OpenAI");
 }
 
-// ---------------- MAIN UPLOAD ENDPOINT ----------------
-router.post("/upload", upload.single("file"), async (req, res) => {
+// Main upload endpoint with validation
+router.post("/upload", (req, res, next) => {
+  upload.single("file")(req, res, (err) => {
+    if (err instanceof multer.MulterError) {
+      if (err.code === "LIMIT_FILE_SIZE") {
+        return res.status(400).json({
+          error: `File size exceeds maximum limit of ${(MAX_SIZE / (1024 * 1024)).toFixed(2)}MB`
+        });
+      }
+      return res.status(400).json({ error: err.message });
+    } else if (err && err.code === "INVALID_FILE_TYPE") {
+      return res.status(400).json({ error: err.message });
+    } else if (err) {
+      return res.status(400).json({ error: err.message });
+    }
+    next();
+  });
+}, async (req, res) => {
   try {
-    if (!req.file) return res.status(400).json({ error: "No file uploaded" });
+    if (!req.file) {
+      return res.status(400).json({ error: "No file uploaded" });
+    }
 
-    const file = fs.readFileSync(req.file.path, "utf8");
+    let file;
+    try {
+      file = fs.readFileSync(req.file.path, "utf8");
+    } catch (err) {
+      fs.unlinkSync(req.file.path);
+      return res.status(400).json({
+        error: "Failed to read file. Ensure it is a valid text file."
+      });
+    }
+
+    if (!file || file.trim().length === 0) {
+      fs.unlinkSync(req.file.path);
+      return res.status(400).json({ error: "File is empty" });
+    }
+
     const hash = sha256(file);
 
-    // Exact duplicate check
     const existing = await get(
       `SELECT l.id as log_id, a.*
        FROM logs l
@@ -88,7 +146,6 @@ router.post("/upload", upload.single("file"), async (req, res) => {
 
     const redacted = redact(file);
 
-    // Similarity caching
     const tokens = tokenize(redacted);
     const recent = await all(
       "SELECT id, hash, redacted_log FROM logs ORDER BY upload_time DESC LIMIT 100"
@@ -116,7 +173,6 @@ router.post("/upload", upload.single("file"), async (req, res) => {
       }
     }
 
-    // Insert new log
     const logInsert = await run(
       `INSERT INTO logs (filename, hash, filesize, redacted_log, status)
        VALUES (?, ?, ?, ?, ?)`,
@@ -124,7 +180,6 @@ router.post("/upload", upload.single("file"), async (req, res) => {
     );
     const logId = logInsert.lastID;
 
-    // Call OpenAI
     const aiJson = await callOpenAIForJSON(redacted);
 
     const aInsert = await run(
@@ -140,6 +195,11 @@ router.post("/upload", upload.single("file"), async (req, res) => {
     res.json({ status: "processed", log_id: logId, analysis });
   } catch (err) {
     console.error(err);
+    if (req.file) {
+      try {
+        fs.unlinkSync(req.file.path);
+      } catch (e) {}
+    }
     res.status(500).json({ error: err.message });
   }
 });

@@ -103,12 +103,29 @@ ${sanitized}
   throw new Error("Non-JSON returned from OpenAI");
 }
 
-// ---------------- MAIN UPLOAD ENDPOINT ----------------
-router.post("/upload", upload.single("file"), async (req, res) => {
+// Main upload endpoint with validation
+router.post("/upload", upload.single("file"), multerErrorHandler, async (req, res) => {
   try {
-    if (!req.file) return res.status(400).json({ error: "No file uploaded" });
+    if (!req.file) {
+      return res.status(400).json({ error: "No file uploaded" });
+    }
 
-    const file = fs.readFileSync(req.file.path, "utf8");
+    // Additional validation for file content
+    let file;
+    try {
+      file = fs.readFileSync(req.file.path, "utf8");
+    } catch (err) {
+      fs.unlinkSync(req.file.path);
+      return res.status(400).json({
+        error: "Failed to read file. Ensure it is a valid text file."
+      });
+    }
+
+    if (!file || file.trim().length === 0) {
+      fs.unlinkSync(req.file.path);
+      return res.status(400).json({ error: "File is empty" });
+    }
+
     const hash = sha256(file);
 
     // Exact duplicate check

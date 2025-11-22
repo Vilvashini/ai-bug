@@ -1,7 +1,6 @@
-// src/api.js
 import axios from "axios";
 
-const BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:4000";
+const BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:5000";
 
 export const uploadLog = async (file) => {
   const formData = new FormData();

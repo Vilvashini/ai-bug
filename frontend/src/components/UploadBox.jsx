@@ -82,17 +82,17 @@ export default function UploadBox({ onUploaded }) {
         setMessage(
           `⚠ Duplicate detected. Log ID: ${res.log.id}. Returning previous analysis.`
         );
-        onUploaded(res);
+        onUploaded(res.analysis);
       } else if (res.status === "cached") {
         setMessage(
           `⚡ Similar log found (score: ${(
             res.similarity * 100
           ).toFixed(2)}%). Returning cached analysis.`
         );
-        onUploaded(res);
+        onUploaded(res.analysis);
       } else if (res.status === "processed") {
         setMessage("✅ New log processed successfully.");
-        onUploaded(res);
+        onUploaded(res.analysis);
       } else {
         setMessage("ℹ Unknown response from server.");
       }

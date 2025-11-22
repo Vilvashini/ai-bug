@@ -42,21 +42,6 @@ const fileFilter = (req, file, cb) => {
   cb(null, true);
 };
 
-// Custom error handler for multer
-const multerErrorHandler = (err, req, res, next) => {
-  if (err instanceof multer.MulterError) {
-    if (err.code === "LIMIT_FILE_SIZE") {
-      return res.status(400).json({
-        error: `File size exceeds maximum limit of ${(MAX_SIZE / (1024 * 1024)).toFixed(2)}MB`
-      });
-    }
-    return res.status(400).json({ error: err.message });
-  } else if (err && err.code === "INVALID_FILE_TYPE") {
-    return res.status(400).json({ error: err.message });
-  }
-  next(err);
-};
-
 // Upload folder setup
 const uploadDir = path.join(__dirname, "..", "uploads");
 if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });

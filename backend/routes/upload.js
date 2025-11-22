@@ -104,13 +104,28 @@ ${sanitized}
 }
 
 // Main upload endpoint with validation
-router.post("/upload", upload.single("file"), multerErrorHandler, async (req, res) => {
+router.post("/upload", (req, res, next) => {
+  upload.single("file")(req, res, (err) => {
+    if (err instanceof multer.MulterError) {
+      if (err.code === "LIMIT_FILE_SIZE") {
+        return res.status(400).json({
+          error: `File size exceeds maximum limit of ${(MAX_SIZE / (1024 * 1024)).toFixed(2)}MB`
+        });
+      }
+      return res.status(400).json({ error: err.message });
+    } else if (err && err.code === "INVALID_FILE_TYPE") {
+      return res.status(400).json({ error: err.message });
+    } else if (err) {
+      return res.status(400).json({ error: err.message });
+    }
+    next();
+  });
+}, async (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({ error: "No file uploaded" });
     }
 
-    // Additional validation for file content
     let file;
     try {
       file = fs.readFileSync(req.file.path, "utf8");
@@ -128,7 +143,6 @@ router.post("/upload", upload.single("file"), multerErrorHandler, async (req, re
 
     const hash = sha256(file);
 
-    // Exact duplicate check
     const existing = await get(
       `SELECT l.id as log_id, a.*
        FROM logs l
@@ -147,7 +161,6 @@ router.post("/upload", upload.single("file"), multerErrorHandler, async (req, re
 
     const redacted = redact(file);
 
-    // Similarity caching
     const tokens = tokenize(redacted);
     const recent = await all(
       "SELECT id, hash, redacted_log FROM logs ORDER BY upload_time DESC LIMIT 100"
@@ -175,7 +188,6 @@ router.post("/upload", upload.single("file"), multerErrorHandler, async (req, re
       }
     }
 
-    // Insert new log
     const logInsert = await run(
       `INSERT INTO logs (filename, hash, filesize, redacted_log, status)
        VALUES (?, ?, ?, ?, ?)`,
@@ -183,7 +195,6 @@ router.post("/upload", upload.single("file"), multerErrorHandler, async (req, re
     );
     const logId = logInsert.lastID;
 
-    // Call OpenAI
     const aiJson = await callOpenAIForJSON(redacted);
 
     const aInsert = await run(
@@ -199,6 +210,11 @@ router.post("/upload", upload.single("file"), multerErrorHandler, async (req, re
     res.json({ status: "processed", log_id: logId, analysis });
   } catch (err) {
     console.error(err);
+    if (req.file) {
+      try {
+        fs.unlinkSync(req.file.path);
+      } catch (e) {}
+    }
     res.status(500).json({ error: err.message });
   }
 });

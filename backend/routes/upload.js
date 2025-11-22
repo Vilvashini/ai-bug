@@ -1,4 +1,3 @@
-// routes/upload.js
 import express from "express";
 import multer from "multer";
 import path from "path";
@@ -23,18 +22,61 @@ if (!process.env.OPENAI_API_KEY) {
   console.error("❌ OPENAI_API_KEY not set in .env");
 }
 
-// ---------------- UPLOAD FOLDER ----------------
+// File validation configuration
+const ALLOWED_FILE_TYPES = [".log", ".txt", ".json"];
+const MAX_SIZE = parseInt(process.env.MAX_UPLOAD_SIZE_BYTES || "5242880", 10);
+
+// Custom file filter for multer
+const fileFilter = (req, file, cb) => {
+  const fileName = file.originalname.toLowerCase();
+  const fileExtension = path.extname(fileName).toLowerCase();
+
+  if (!ALLOWED_FILE_TYPES.includes(fileExtension)) {
+    const error = new Error(
+      `Invalid file type. Allowed types: ${ALLOWED_FILE_TYPES.join(", ")}`
+    );
+    error.code = "INVALID_FILE_TYPE";
+    return cb(error);
+  }
+
+  cb(null, true);
+};
+
+// Custom error handler for multer
+const multerErrorHandler = (err, req, res, next) => {
+  if (err instanceof multer.MulterError) {
+    if (err.code === "LIMIT_FILE_SIZE") {
+      return res.status(400).json({
+        error: `File size exceeds maximum limit of ${(MAX_SIZE / (1024 * 1024)).toFixed(2)}MB`
+      });
+    }
+    return res.status(400).json({ error: err.message });
+  } else if (err && err.code === "INVALID_FILE_TYPE") {
+    return res.status(400).json({ error: err.message });
+  }
+  next(err);
+};
+
+// Upload folder setup
 const uploadDir = path.join(__dirname, "..", "uploads");
 if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
 
 const storage = multer.diskStorage({
   destination: uploadDir,
-  filename: (req, file, cb) =>
-    cb(null, Date.now() + "-" + file.originalname.replace(/\s+/g, "_"))
+  filename: (req, file, cb) => {
+    const timestamp = Date.now();
+    const sanitizedName = file.originalname
+      .replace(/\s+/g, "_")
+      .replace(/[^a-zA-Z0-9._-]/g, "");
+    cb(null, `${timestamp}-${sanitizedName}`);
+  }
 });
 
-const MAX_SIZE = parseInt(process.env.MAX_UPLOAD_SIZE_BYTES || "5242880", 10);
-const upload = multer({ storage, limits: { fileSize: MAX_SIZE } });
+const upload = multer({
+  storage,
+  limits: { fileSize: MAX_SIZE },
+  fileFilter
+});
 
 // ---------------- OPENAI JSON CALL ----------------
 export async function callOpenAIForJSON(sanitized) {
